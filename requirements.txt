@@ -8,3 +8,4 @@ soupsieve==2.3.2
 tqdm==4.64.1
 urllib3==1.26.13
 click_spinner==0.1.10
+texttable==1.7.0

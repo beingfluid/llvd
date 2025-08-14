@@ -21,16 +21,17 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
-        "beautifulsoup4==4.11.1",
-        "certifi==2022.12.7",
-        "chardet==5.1.0",
-        "click==8.1.3",
-        "idna==3.4",
-        "requests==2.28.1",
-        "soupsieve==2.3.2",
-        "tqdm==4.64.1",
-        "urllib3==1.26.13",
-        "click_spinner==0.1.10"
+        "beautifulsoup4>=4.12.2",  # Latest stable, maintains BS4 compatibility
+        "certifi>=2023.7.22",      # Security updates
+        "chardet>=5.2.0",          # Security and bug fixes
+        "click>=8.1.7",            # Latest stable with bug fixes
+        "idna>=3.4",               # Keep current as it's a core dependency
+        "requests>=2.31.0",        # Latest stable with security updates
+        "soupsieve>=2.5",          # Compatible with latest beautifulsoup4
+        "tqdm>=4.66.1",            # Latest stable with bug fixes
+        "urllib3>=2.0.7",          # Latest stable with security updates
+        "click-spinner>=0.1.10",   # Keep current as it's a stable release
+        "texttable>=1.7.0"        # Keep current as it's a stable release
     ],
     entry_points={"console_scripts": ["llvd = llvd.cli:main"]},
     classifiers=[

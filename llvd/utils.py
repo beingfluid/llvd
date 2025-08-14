@@ -1,3 +1,4 @@
+import os
 import re
 from random import randint
 from time import sleep
@@ -46,3 +47,28 @@ def throttle(wait_time=None):
     sleep(delay)
     # clean up delay message
     print(f'{cursor_up}{clear_line}{cursor_up}{cursor_home}')
+
+
+
+def cleanup_empty_directories(path, errors=None):
+    """Recursively remove empty directories. Returns the number of removed directories."""
+    if not os.path.isdir(path):
+        return 0
+
+    removed = 0
+    try:
+        # Recursively process subdirectories
+        entries = os.listdir(path)
+        for entry in entries:
+            full_path = os.path.join(path, entry)
+            if os.path.isdir(full_path):
+                removed += cleanup_empty_directories(full_path, errors)
+        # Check if directory is empty after processing subdirectories
+        entries = os.listdir(path)
+        if not entries:
+            os.rmdir(path)
+            removed += 1
+    except (OSError, PermissionError) as e:
+        if errors is not None:
+            errors.append(f"Failed to clean up directory {path}: {str(e)}")
+    return removed
