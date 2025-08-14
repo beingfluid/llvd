@@ -253,164 +253,160 @@ class App:
 
     def fetch_video(self, video):
         """
-        Fetch video data and save response for debugging if in debug mode
+        Fetch video data in the highest available resolution (1080p with fallback to 720p)
+        and save response for debugging if in debug mode
         """
         video_name = re.sub(r'[\\/*?:"<>|]', "", video["title"])
         self.current_video_name = video_name
         video_slug = video["slug"]
-        video_url = config.video_url.format(
-            self.course_slug, self.video_format, video_slug
-        )
         
-        try:
-            page_data = requests.get(
-                video_url,
-                cookies=self.cookies,
-                headers=self.headers,
-                allow_redirects=False,
-                timeout=30  
+        resolutions_to_try = [self.video_format]
+        if self.video_format == "1080":
+            resolutions_to_try = ["1080", "720"]
+        
+        last_exception = None
+        
+        for resolution in resolutions_to_try:
+            self.video_format = resolution
+            video_url = config.video_url.format(
+                self.course_slug, resolution, video_slug
             )
             
-            # Parse the response
             try:
-                page_json = page_data.json()
-                
-                # Check for locked/premium content
-                if "elements" in page_json and page_json["elements"] and \
-                   isinstance(page_json["elements"][0], dict):
-                    
-                    element = page_json["elements"][0]
-                    is_locked = element.get("isLocked", False) or element.get("lockedState") == "LOCKED"
-                    requires_subscription = element.get("requiresSubscription", False)
-                    
-                    if is_locked or requires_subscription:
-                        error_info = {
-                            "status": "locked_content",
-                            "url": video_url,
-                            "is_locked": is_locked,
-                            "requires_subscription": requires_subscription,
-                            "video_slug": video_slug,
-                            "video_name": video_name,
-                            "response_metadata": {
-                                "status_code": page_data.status_code,
-                                "content_type": page_data.headers.get("content-type")
-                            }
-                        }
-                        if self.debug_mode:
-                            self._save_debug_info(
-                                {**error_info, "full_response": page_json},
-                                video_slug,
-                                "locked_content"
-                            )
-                        raise ValueError("This video is locked or requires a premium subscription")
-                
-                # Save successful response for debugging
-                if self.debug_mode and page_data.status_code == 200:
-                    self._save_debug_info(
-                        {
-                            "status": "success",
-                            "url": video_url,
-                            "response": page_json,
-                            "video_slug": video_slug,
-                            "video_name": video_name,
-                            "headers": dict(page_data.headers),
-                            "status_code": page_data.status_code
-                        },
-                        video_slug,
-                        "success"
-                    )
-                
-                download_url = self._extract_video_url(page_json, video_slug, video_name)
-                if not download_url:
-                    raise ValueError("No video URL found")
-                
-                # Get subtitles if available
-                subtitles = page_json["elements"][0].get("selectedVideo", {}).get("transcript")
-                duration_in_ms = int(page_json["elements"][0].get("selectedVideo", {}).get("durationInSeconds", 0)) * 1000
-
-                click.echo(
-                    click.style(
-                        f"\nCurrent: {self.current_chapter_index:02d}. {self.chapter_path.split('/')[-1]}/"
-                        f"{self.current_video_index:02d}. {video_name}.mp4 @{self.video_format}p"
-                    )
+                page_data = requests.get(
+                    video_url,
+                    cookies=self.cookies,
+                    headers=self.headers,
+                    allow_redirects=False,
+                    timeout=30  
                 )
-
-                # Download the video
                 try:
-                    download_video(
-                        download_url,
+                    page_json = page_data.json()
+                    
+                    # Check for locked/premium content
+                    if "elements" in page_json and page_json["elements"] and \
+                       isinstance(page_json["elements"][0], dict):
+                        
+                        element = page_json["elements"][0]
+                        is_locked = element.get("isLocked", False) or element.get("lockedState") == "LOCKED"
+                        requires_subscription = element.get("requiresSubscription", False)
+                        
+                        if is_locked or requires_subscription:
+                            error_info = {
+                                "status": "locked_content",
+                                "url": video_url,
+                                "is_locked": is_locked,
+                                "requires_subscription": requires_subscription,
+                                "video_slug": video_slug,
+                                "video_name": video_name,
+                                "response_metadata": {
+                                    "status_code": page_data.status_code,
+                                    "content_type": page_data.headers.get("content-type")
+                                }
+                            }
+                            if self.debug_mode:
+                                self._save_debug_info(
+                                    {**error_info, "full_response": page_json},
+                                    video_slug,
+                                    "locked_content"
+                                )
+                            raise ValueError("This video is locked or requires a premium subscription")
+                    
+                    # Save successful response for debugging
+                    if self.debug_mode and page_data.status_code == 200:
+                        self._save_debug_info(
+                            {
+                                "status": "success",
+                                "url": video_url,
+                                "resolution": resolution,
+                                "response": page_json,
+                                "video_slug": video_slug,
+                                "video_name": video_name,
+                                "headers": dict(page_data.headers),
+                                "status_code": page_data.status_code
+                            },
+                            video_slug,
+                            f"success_{resolution}p"
+                        )
+                    
+                    download_url = self._extract_video_url(page_json, video_slug, video_name)
+                    if not download_url:
+                        if resolution == "1080" and "720" in resolutions_to_try:
+                            continue
+                        raise ValueError("No video URL found")
+                    
+                    break
+                    
+                except ValueError as e:
+                    last_exception = e
+                    if resolution == "1080" and "720" in resolutions_to_try:
+                        continue
+                    raise
+                    
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                if resolution == "1080" and "720" in resolutions_to_try:
+                    continue
+                raise
+        else:
+            if last_exception:
+                raise last_exception
+            raise ValueError("Failed to fetch video data")
+        
+        # Get subtitles if available (from the last successful response)
+        subtitles = page_json["elements"][0].get("selectedVideo", {}).get("transcript")
+        duration_in_ms = int(page_json["elements"][0].get("selectedVideo", {}).get("durationInSeconds", 0)) * 1000
+
+        click.echo(
+            click.style(
+                f"\nCurrent: {self.current_chapter_index:02d}. {self.chapter_path.split('/')[-1]}/"
+                f"{self.current_video_index:02d}. {video_name}.mp4 @{resolution}p"
+            )
+        )
+        try:
+            download_video(
+                download_url,
+                self.current_video_index,
+                video_name,
+                self.chapter_path,
+                self.throttle,
+            )
+            
+            # Only try to download subtitles if video download was successful
+            if subtitles and self.caption:
+                try:
+                    download_subtitles(
                         self.current_video_index,
+                        subtitles.get("lines", []),
                         video_name,
                         self.chapter_path,
-                        self.throttle,
+                        duration_in_ms,
                     )
-                    
-                    # Only try to download subtitles if video download was successful
-                    if subtitles and self.caption:
-                        try:
-                            download_subtitles(
-                                self.current_video_index,
-                                subtitles.get("lines", []),
-                                video_name,
-                                self.chapter_path,
-                                duration_in_ms,
-                            )
-                        except Exception as e:
-                            click.echo(click.style(
-                                f"[WARNING] Failed to download subtitles: {str(e)}", 
-                                fg="yellow"
-                            ))
-                            
                 except Exception as e:
-                    self._start_modified_spinner("...")
-                    if self.debug_mode:
-                        self._save_debug_info(page_json, video_slug, "download_failed")
+                    click.echo(click.style(
+                        f"[WARNING] Failed to download subtitles: {str(e)}", 
+                        fg="yellow"
+                    ))
                     
-            except ValueError as e:
-                self._start_modified_spinner("...")
-                if self.debug_mode:
-                    self._save_debug_info(
-                        {
-                            "status": "json_parse_error",
-                            "url": video_url,
-                            "error": str(e),
-                            "response_text": page_data.text[:1000],
-                            "headers": dict(page_data.headers),
-                            "status_code": page_data.status_code,
-                            "video_slug": video_slug,
-                            "video_name": video_name
-                        },
-                        video_slug,
-                        "json_parse_error"
-                    )
-                
-                
-        except requests.exceptions.Timeout:
-            self._start_modified_spinner("...")
-            error_msg = f"Request timed out for video: {video_name}"
-            click.echo(click.style(f"[ERROR] {error_msg}", fg="red"))
-            if self.debug_mode:
-                self._save_debug_info(
-                    {"status": "timeout", "url": video_url, "error": error_msg},
-                    video_slug,
-                    "request_timeout"
-                )
-            
         except Exception as e:
             self._start_modified_spinner("...")
             if self.debug_mode:
                 self._save_debug_info(
                     {
-                        "status": "request_error",
-                        "url": video_url,
+                        "status": "download_failed",
+                        "url": download_url,
+                        "resolution": resolution,
                         "error": str(e),
-                        "error_type": type(e).__name__,
                         "video_slug": video_slug,
                         "video_name": video_name
                     },
                     video_slug,
-                    "request_error"
+                    "download_failed"
                 )
+            raise
+        finally:
+            # Restore the original video format
+            self.video_format = original_format
 
     def _extract_video_url(self, page_json, video_slug, video_name):
         """Extract video URL from the JSON response with multiple fallback methods"""

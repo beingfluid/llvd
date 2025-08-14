@@ -1,4 +1,3 @@
-import sys
 import click
 from typing import Optional
 
@@ -31,7 +30,7 @@ RED_COLOR = "\u001b[31m"
     "--resolution",
     "-r",
     default="720",
-    type=click.Choice(["360", "540", "720"], case_sensitive=False),
+    type=click.Choice(["360", "540", "720", "1080"], case_sensitive=False),
     help="Video resolution (default: 720)",
 )
 @click.option(
