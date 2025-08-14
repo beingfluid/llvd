@@ -1,15 +1,19 @@
 from setuptools import setup, find_packages
 from os import path
-import llvd
+import re
 
 current_dir = path.abspath(path.dirname(__file__))
 
 with open(path.join(current_dir, "README.md"), "r", encoding="utf-8") as f:
     readme = f.read()
 
+def get_version():
+    with open(path.join(current_dir, "llvd", "__init__.py"), "r") as f:
+        content = f.read()
+    return re.search(r'__version__\s*=\s*[\'"]([^\'"]+)[\'"]', content).group(1)
 setup(
     name="llvd",
-    version=llvd.__version__,
+    version=get_version(),
     url="https://github.com/knowbee/llvd.git",
     author="Igwaneza Bruce",
     author_email="knowbeeinc@gmail.com",
