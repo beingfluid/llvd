@@ -1,21 +1,21 @@
-import sys
 import click
-from llvd import config
+from typing import Optional
+
+from llvd import config, __version__
 from llvd.app import App
-import click
-import sys
-from llvd import config
 from llvd.process_io import parse_cookie_file, parse_header_file
-from llvd.utils import clean_dir
+from llvd.validators import validate_course_and_path, parse_throttle
 
-
-BOLD = "\033[1m"  # Makes the text bold
-RED_COLOR = "\u001b[31m"  # Makes the text red
-PATH = "path"
-COURSE = "course"
-
+BOLD = "\033[1m"
+RED_COLOR = "\u001b[31m"
 
 @click.command()
+@click.option(
+    "--version",
+    "-v",
+    is_flag=True,
+    help="Show version and exit",
+)
 @click.option(
     "--cookies",
     is_flag=True,
@@ -30,85 +30,106 @@ COURSE = "course"
     "--resolution",
     "-r",
     default="720",
-    help="Video resolution can either be 360, 540 or 720. 720 is the default",
+    type=click.Choice(["360", "540", "720", "1080"], case_sensitive=False),
+    help="Video resolution (default: 720)",
 )
-@click.option("--caption", "-ca", is_flag=True, help="Download subtitles")
-@click.option("--exercise", "-e", is_flag=True, help="Download Exercises")
-@click.option("--course", "-c", help="Example: 'java-8-essential'")
+@click.option(
+    "--caption",
+    "-ca",
+    is_flag=True,
+    help="Download subtitles",
+)
+@click.option(
+    "--exercise",
+    "-e",
+    is_flag=True,
+    help="Download exercises",
+)
+@click.option(
+    "--course",
+    "-c",
+    help="Course slug (e.g., 'java-8-essential')",
+)
 @click.option(
     "--path",
     "-p",
-    help="Specify learning path to download. Example: 'llvd -p become-a-php-developer -t 20'",
+    help="Learning path slug (e.g., 'become-a-php-developer')",
 )
 @click.option(
     "--throttle",
     "-t",
-    help="A min,max wait in seconds before downloading next video. Example: -t 30,120",
+    help="Min,max wait in seconds between downloads (e.g., '10,30' or '5')",
 )
-def main(cookies, headers, course, resolution, caption, exercise, path, throttle):
+@click.pass_context
+def main(
+    ctx: click.Context,
+    version: bool,
+    cookies: bool,
+    headers: bool,
+    resolution: str,
+    caption: bool,
+    exercise: bool,
+    course: Optional[str],
+    path: Optional[str],
+    throttle: Optional[str],
+) -> None:
     """
-    Linkedin learning video downloader cli tool
-    example: llvd --course "java-8-essential"
+    LinkedIn Learning Video Downloader (LLVD)
+    
+    Download LinkedIn Learning courses for offline viewing.
+    
+    Examples:
+    
+    \b
+    $ llvd --course "java-8-essential" --cookies
+    $ llvd -p "become-a-php-developer" -t 10,30 --cookies
     """
-    if not len(sys.argv) != 1:
-        click.echo(f"{RED_COLOR}{BOLD}Missing required arguments: llvd --help")
-        sys.exit(0)
-
-    if path:
-        course_slug = (clean_dir(path), PATH)
-    else:
-        course_slug = (clean_dir(course), COURSE)
-
-    email = config.email
-    password = config.password
+    if version:
+        click.echo(f"LLVD version: {__version__}")
+        return
 
     try:
-        if throttle and "," in throttle:
-            throttle = [int(i) for i in throttle.split(",")]
-        elif throttle:
-            throttle = [int(throttle)]
-    except ValueError:
-        click.echo(click.style("Throttle must be a number", fg="red"))
-        sys.exit(0)
-
-    # Check that both course and path are not both set. Can only be one or other.
-    if course and path:
-        click.echo(
-            click.style(
-                "Please specify either a course OR learning path, not both.", fg="red"
-            )
+        # Validate and process course/path
+        course_slug, is_path = validate_course_and_path(course, path)
+        
+        # Parse throttle values
+        throttle_values = parse_throttle(throttle)
+        
+        # Validate path requires throttle
+        if is_path and not throttle_values:
+            raise click.UsageError("Throttle option (-t) is required when using --path")
+        
+        # Initialize and run the application
+        app = App(
+            email=config.email,
+            password=config.password,
+            course_slug=course_slug,
+            resolution=resolution,
+            caption=caption,
+            exercise=exercise,
+            throttle=throttle_values,
         )
-        sys.exit(0)
 
-    if path and not throttle:
-        click.echo(
-            click.style(
-                "Please use throttle option (-t) when downloading learning paths.",
-                fg="red",
-            )
-        )
-        sys.exit(0)
+        if cookies:
+            cookie_dict = parse_cookie_file()
+            if not all(k in cookie_dict for k in ("li_at", "JSESSIONID")):
+                raise click.UsageError("cookies.txt must contain both 'li_at' and 'JSESSIONID' cookies")
+                
+            click.echo(click.style("Using cookie info from cookies.txt", fg="green"))
 
-    if cookies:
-        cookie_dict = parse_cookie_file()
-        if "li_at" not in cookie_dict or "JSESSIONID" not in cookie_dict:
-            click.echo(click.style(f"cookies.txt must not be empty", fg="red"))
-            sys.exit(0)
+            if headers:
+                header_dict = parse_header_file()
+                app.run(cookie_dict, header_dict)
+            else:
+                app.run(cookie_dict)
         else:
-            click.echo(click.style(f"Using cookie info from cookies.txt", fg="green"))
+            if not config.email:
+                config.email = click.prompt("Please enter your LinkedIn email address")
+            if not config.password:
+                config.password = click.prompt("Enter your LinkedIn Password", hide_input=True)
 
-        app = App(email, password, course_slug, resolution, caption, exercise, throttle)
-        if headers:
-            header_dict = parse_header_file()
-            app.run(cookie_dict, header_dict)
-        else:
-            app.run(cookie_dict)
+            app.run()
 
-    else:
-        if email == "":
-            email = click.prompt("Please enter your Linkedin email address")
-        if password == "":
-            password = click.prompt("Enter your Linkedin Password", hide_input=True)
-
-        app = App(email, password, course_slug, resolution, caption, exercise, throttle)
-        app.run()
+    except Exception as e:
+        click.echo(click.style(f"Error: {str(e)}", fg="red"), err=True)
+        ctx.exit(1)
