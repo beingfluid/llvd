@@ -22,7 +22,7 @@ import time
 
 class App:
     def __init__(
-        self, email, password, course_slug, resolution, caption, exercise, throttle
+        self, email, password, course_slug, resolution, caption, exercise, throttle, proxies=None
     ):
         self.email = email
         self.password = password
@@ -43,6 +43,28 @@ class App:
         self.current_video_name = ""
         self.throttle = throttle
         self.debug_mode = True
+        
+        # Initialize proxy support
+        self.proxies = proxies or []
+        self.current_proxy_idx = 0
+        
+        # Initialize summary tracking
+        self.summary = {
+            'courses_processed': 0,
+            'videos': {
+                'total': 0,
+                'downloaded': 0,
+                'skipped': 0,
+                'failed': 0,
+                'already_exist': 0
+            },
+            'chapters': {
+                'total': 0,
+                'empty': 0,
+                'deleted': 0
+            },
+            'errors': []
+        }
         
         # Initialize summary tracking
         self.summary = {
@@ -118,6 +140,17 @@ class App:
                 )
             )
 
+    def get_session(self):
+        session = Session()
+        if self.proxies:
+            click.echo(click.style("\nUsing proxies for requests", fg="green"))
+            proxy = self.proxies() if callable(self.proxies) else self.proxies
+            session.proxies = {
+                "http": proxy,
+                "https": proxy,
+            }
+        return session
+
     def run(self, cookies=None, headers={}):
         """
         Main function, tries to login the user and when it succeeds, tries to download the course
@@ -138,7 +171,7 @@ class App:
                 # proceed to download
                 self.download()
             else:
-                with Session() as session:
+                with self.get_session() as session:
                     site = session.get(config.login_url)
                     bs_content = bs(site.content, "html.parser")
 
@@ -213,10 +246,10 @@ class App:
                 self._save_debug_info(e, self.course_slug, "download")
 
     def download_courses_from_path(self):
-
         try:
             page_url = config.path_url.format(self.course_slug)
-            page = requests.get(page_url)
+            with self.get_session() as session:
+                page = session.get(page_url)
             soup = bs(page.content, "html.parser")
             course_list = soup.select('script[type="application/ld+json"]')
 
@@ -259,30 +292,34 @@ class App:
         video_name = re.sub(r'[\\/*?:"<>|]', "", video["title"])
         self.current_video_name = video_name
         video_slug = video["slug"]
-        
+        original_format = self.video_format  # <-- Add this line
+
         resolutions_to_try = [self.video_format]
         if self.video_format == "1080":
             resolutions_to_try = ["1080", "720"]
-        
+
         last_exception = None
-        
+        page_json = None
+        download_url = None
+        download_success = False
+
         for resolution in resolutions_to_try:
             self.video_format = resolution
             video_url = config.video_url.format(
                 self.course_slug, resolution, video_slug
             )
-            
+
             try:
-                page_data = requests.get(
-                    video_url,
-                    cookies=self.cookies,
-                    headers=self.headers,
-                    allow_redirects=False,
-                    timeout=30  
-                )
+                with self.get_session() as session:
+                    page_data = session.get(
+                        video_url,
+                        cookies=self.cookies,
+                        headers=self.headers,
+                        allow_redirects=False,
+                        timeout=30
+                    )
                 try:
                     page_json = page_data.json()
-                    
                     # Check for locked/premium content
                     if "elements" in page_json and page_json["elements"] and \
                        isinstance(page_json["elements"][0], dict):
@@ -334,15 +371,12 @@ class App:
                         if resolution == "1080" and "720" in resolutions_to_try:
                             continue
                         raise ValueError("No video URL found")
-                    
                     break
-                    
                 except ValueError as e:
                     last_exception = e
                     if resolution == "1080" and "720" in resolutions_to_try:
                         continue
                     raise
-                    
             except requests.exceptions.RequestException as e:
                 last_exception = e
                 if resolution == "1080" and "720" in resolutions_to_try:
@@ -352,7 +386,7 @@ class App:
             if last_exception:
                 raise last_exception
             raise ValueError("Failed to fetch video data")
-        
+
         # Get subtitles if available (from the last successful response)
         subtitles = page_json["elements"][0].get("selectedVideo", {}).get("transcript")
         duration_in_ms = int(page_json["elements"][0].get("selectedVideo", {}).get("durationInSeconds", 0)) * 1000
@@ -364,16 +398,16 @@ class App:
             )
         )
         try:
-            download_video(
+            download_success = download_video(
                 download_url,
                 self.current_video_index,
                 video_name,
                 self.chapter_path,
                 self.throttle,
             )
-            
+
             # Only try to download subtitles if video download was successful
-            if subtitles and self.caption:
+            if subtitles and self.caption and download_success:
                 try:
                     download_subtitles(
                         self.current_video_index,
@@ -384,10 +418,10 @@ class App:
                     )
                 except Exception as e:
                     click.echo(click.style(
-                        f"[WARNING] Failed to download subtitles: {str(e)}", 
+                        f"[WARNING] Failed to download subtitles: {str(e)}",
                         fg="yellow"
                     ))
-                    
+
         except Exception as e:
             self._start_modified_spinner("...")
             if self.debug_mode:
@@ -407,6 +441,8 @@ class App:
         finally:
             # Restore the original video format
             self.video_format = original_format
+
+        return page_json, video_name, download_success
 
     def _extract_video_url(self, page_json, video_slug, video_name):
         """Extract video URL from the JSON response with multiple fallback methods"""
@@ -468,9 +504,6 @@ class App:
             return None
 
     def fetch_chapter(self, chapter, chapters_pad_length, delay):
-        """
-        Downloads all videos in a chapter with enhanced error handling and debugging
-        """
         chapter_name = chapter["title"]
         videos = chapter["videos"]
         chapters_index_padded = str(self.current_chapter_index).rjust(
@@ -506,6 +539,9 @@ class App:
         
         self.summary['videos']['total'] += len(videos)
 
+        # Track how many videos were downloaded in this chapter
+        downloaded_in_chapter = 0
+
         for video in videos_to_download:
             self.current_video_index = video_index + len(current_files)
             video_name = re.sub(r'[\\/*?:"<>|]', "", video["title"])
@@ -525,7 +561,7 @@ class App:
             try:
                 # Fetch video data
                 try:
-                    page_json, video_name = self.fetch_video(video)
+                    page_json, video_name, download_success = self.fetch_video(video)
                 except ValueError as e:
                     if "locked" in str(e).lower() or "premium" in str(e).lower():
                         click.echo(click.style(
@@ -549,60 +585,14 @@ class App:
                     video_index += 1
                     continue
 
-                # Get subtitles if available
-                selected_video = page_json["elements"][0].get("selectedVideo", {})
-                subtitles = selected_video.get("transcript")
-                duration_in_ms = int(selected_video.get("durationInSeconds", 0)) * 1000
-
-                click.echo(
-                    click.style(
-                        f"\nCurrent: {chapters_index_padded}. {clean_name(chapter_name)}/"
-                        f"{self.current_video_index:02d}. {video_name}.mp4 @{self.video_format}p"
-                    )
-                )
-
-                # Download the video
-                try:
-                    download_video(
-                        download_url,
-                        self.current_video_index,
-                        video_name,
-                        chapter_path,
-                        delay,
-                    )
-                    
-                    # Only try to download subtitles if video download was successful
-                    if subtitles and self.caption:
-                        try:
-                            download_subtitles(
-                                self.current_video_index,
-                                subtitles.get("lines", []),
-                                video_name,
-                                chapter_path,
-                                duration_in_ms,
-                            )
-                        except Exception as e:
-                            click.echo(click.style(
-                                f"[WARNING] Failed to download subtitles: {str(e)}", 
-                                fg="yellow"
-                            ))
-                    
-                    # Mark video as successfully downloaded
+                # Mark video as successfully downloaded
+                if download_success:
                     self._mark_video_downloaded(video_name)
                     self.summary['videos']['downloaded'] += 1
-                            
-                except Exception as e:
-                    self._start_modified_spinner("...")
+                    downloaded_in_chapter += 1  # <-- Track successful downloads
+                else:
                     self.summary['videos']['failed'] += 1
-                    self.summary['errors'].append(f"Failed to download '{video_name}': {str(e)}")
-                    if self.debug_mode:
-                        self._save_debug_info(
-                            {"error": str(e), "download_url": download_url},
-                            video_slug,
-                            "download_failed"
-                        )
-                    
-        
+
             except Exception as e:
                 self._start_modified_spinner("...")
                 self.summary['videos']['failed'] += 1
@@ -614,30 +604,36 @@ class App:
                         "processing_error"
                     )
             video_index += 1
-        
-        # Check if chapter is empty after processing
+
+        # Optionally, still check if the directory is empty and log an error if so
         try:
             entries = os.listdir(chapter_path)
             if not entries:
+                # Directory is empty, but this should be rare now
+                pass
+        except OSError as e:
+            self.summary['errors'].append(f"Error checking chapter directory {chapter_path}: {str(e)}")
+        
+        # After all downloads, check if the chapter is truly empty (no .mp4 files at all)
+        try:
+            mp4_files = [f for f in os.listdir(chapter_path) if f.endswith(".mp4")]
+            if len(videos) > 0 and not mp4_files:
                 self.summary['chapters']['empty'] += 1
         except OSError as e:
             self.summary['errors'].append(f"Error checking chapter directory {chapter_path}: {str(e)}")
-    
+
     def download_entire_course(self, *args, **kwargs):
         skip_done_alert = kwargs.get("skip_done_alert", False)
         try:
-            # Initialize spinner for course initialization
             self._start_spinner("Initializing course download...")
-            
             course_url = config.course_url.format(self.course_slug)
-
-            r = requests.get(
+            r = self._request_with_proxies(
+                "get",
                 course_url,
                 cookies=self.cookies,
                 headers=self.headers,
                 allow_redirects=True,
             )
-
             try:
                 response_json = r.json()
 
@@ -713,6 +709,59 @@ class App:
             if not skip_done_alert:
                 self._print_summary()
 
+    def _get_next_proxy(self):
+        """Get the next proxy from the list in a round-robin fashion"""
+        if not self.proxies:
+            return None
+            
+        proxy = self.proxies[self.current_proxy_idx]
+        self.current_proxy_idx = (self.current_proxy_idx + 1) % len(self.proxies)
+        return {
+            'http': proxy,
+            'https': proxy,
+        }
+
+    def _make_request(self, method, url, **kwargs):
+        """Wrapper around requests to handle proxy rotation and retries"""
+        max_retries = len(self.proxies) if self.proxies else 1
+        last_exception = None
+        
+        for attempt in range(max_retries):
+            proxy = self._get_next_proxy()
+            try:
+                if proxy:
+                    kwargs['proxies'] = proxy
+                    if self.debug_mode:
+                        click.echo(click.style(f"Using proxy: {proxy}", fg="cyan"))
+                
+                if method.upper() == 'GET':
+                    response = requests.get(url, **kwargs)
+                elif method.upper() == 'POST':
+                    response = requests.post(url, **kwargs)
+                elif method.upper() == 'PUT':
+                    response = requests.put(url, **kwargs)
+                elif method.upper() == 'DELETE':
+                    response = requests.delete(url, **kwargs)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
+                
+                response.raise_for_status()
+                return response
+                
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                if self.debug_mode:
+                    click.echo(click.style(f"Attempt {attempt + 1} failed with proxy {proxy}: {str(e)}", fg="yellow"))
+                continue
+        
+        # If we get here, all retries failed
+        if last_exception:
+            if self.debug_mode:
+                click.echo(click.style(f"All proxy attempts failed. Last error: {str(last_exception)}", fg="red"))
+            raise last_exception
+            
+        raise Exception("Failed to make request")
+
     def _print_summary(self):
         """Print a formatted summary of the download process in a table format"""
         summary = self.summary
@@ -784,3 +833,23 @@ class App:
         """Ensure output ends with a newline"""
         sys.stdout.write("\n")
         sys.stdout.flush()
+
+    def _request_with_proxies(self, method, url, **kwargs):
+        """
+        Try all proxies in self.proxies for a request, return the first successful response.
+        If no proxies or all fail, raise the last exception.
+        """
+        proxies = self.proxies if self.proxies else [None]
+        last_exc = None
+        for proxy in proxies:
+            try:
+                with Session() as session:
+                    if proxy:
+                        session.proxies = {"http": proxy, "https": proxy}
+                    resp = session.request(method, url, **kwargs)
+                    resp.raise_for_status()
+                    return resp
+            except Exception as exc:
+                last_exc = exc
+                continue
+        raise last_exc if last_exc else Exception("All proxies failed or no proxies provided.")

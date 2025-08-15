@@ -2,6 +2,7 @@ import os
 import re
 from random import randint
 from time import sleep
+import random
 
 
 def subtitles_time_format(ms):
@@ -49,7 +50,6 @@ def throttle(wait_time=None):
     print(f'{cursor_up}{clear_line}{cursor_up}{cursor_home}')
 
 
-
 def cleanup_empty_directories(path, errors=None):
     """Recursively remove empty directories. Returns the number of removed directories."""
     if not os.path.isdir(path):
@@ -72,3 +72,15 @@ def cleanup_empty_directories(path, errors=None):
         if errors is not None:
             errors.append(f"Failed to clean up directory {path}: {str(e)}")
     return removed
+
+
+def load_proxies(proxy_file_path):
+    """Load proxies from a file, return a list of proxy URLs."""
+    with open(proxy_file_path, "r") as f:
+        proxies = [line.strip() for line in f if line.strip()]
+    return proxies
+
+
+def get_random_proxy(proxies):
+    """Return a random proxy from the list."""
+    return random.choice(proxies) if proxies else None
