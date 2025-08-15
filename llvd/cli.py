@@ -1,10 +1,12 @@
 import click
 from typing import Optional
+import random
 
 from llvd import config, __version__
 from llvd.app import App
 from llvd.process_io import parse_cookie_file, parse_header_file
 from llvd.validators import validate_course_and_path, parse_throttle
+from llvd.utils import load_proxies, get_random_proxy
 
 BOLD = "\033[1m"
 RED_COLOR = "\u001b[31m"
@@ -60,6 +62,12 @@ RED_COLOR = "\u001b[31m"
     "-t",
     help="Min,max wait in seconds between downloads (e.g., '10,30' or '5')",
 )
+@click.option(
+    "--proxy-file",
+    "proxy_file",
+    default=None,
+    help="Path to a file containing a list of proxies (one per line)",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -72,6 +80,7 @@ def main(
     course: Optional[str],
     path: Optional[str],
     throttle: Optional[str],
+    proxy_file: Optional[str],
 ) -> None:
     """
     LinkedIn Learning Video Downloader (LLVD)
@@ -89,11 +98,22 @@ def main(
         return
 
     try:
+        # Parse proxy file if provided
+        proxies = []
+        if proxy_file:
+            try:
+                with open(proxy_file, 'r') as f:
+                    proxies = [line.strip() for line in f if line.strip()]
+                click.echo(click.style(f"Loaded {len(proxies)} proxies from {proxy_file}", fg="green"))
+            except Exception as e:
+                click.echo(click.style(f"Failed to load proxies from {proxy_file}: {str(e)}", fg="red"))
+                return
+
         # Validate and process course/path
         course_slug, is_path = validate_course_and_path(course, path)
         
         # Parse throttle values
-        throttle_values = parse_throttle(throttle)
+        throttle_values = parse_throttle(throttle) if throttle else None
         
         # Validate path requires throttle
         if is_path and not throttle_values:
@@ -108,6 +128,7 @@ def main(
             caption=caption,
             exercise=exercise,
             throttle=throttle_values,
+            proxies=proxies
         )
 
         if cookies:

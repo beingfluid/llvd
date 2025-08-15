@@ -1,0 +1,20 @@
+# Example proxy file for LLVD
+# Add one proxy per line in the format:
+# protocol://username:password@host:port
+# or
+# protocol://host:port
+
+# HTTP/HTTPS proxies (with authentication)
+# http://user:pass@proxy1.example.com:8080
+# https://user:pass@proxy2.example.com:3128
+
+# SOCKS proxies (with authentication)
+# socks5://user:pass@proxy3.example.com:1080
+# socks4://user:pass@proxy4.example.com:1080
+
+# Example without authentication
+# http://proxy.example.com:8080
+# https://proxy.example.com:3128
+
+# To use with LLVD, save this file as 'proxies.txt' and run:
+# llvd -c "course-slug" --proxy-file proxies.txt
